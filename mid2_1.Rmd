@@ -1,0 +1,150 @@
+---
+title: "BIOSTAT 626 HW1"
+author: "yifei dai"
+date: '2023-02-05'
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r}
+library(dplyr)
+library(cluster)
+library(ggplot2)
+library(Rtsne)
+```
+
+
+#Problem 1
+```{r}
+dt <- read.table("hgdp.txt")
+head(dt)
+```
+
+```{r}
+print(any(is.na(dt[, 4:ncol(dt)]))) # FALSE, no missing value
+
+# 获取从第4列开始的所有列的类别
+column_classes <- sapply(dt[, 4:ncol(dt)], class)
+
+# 检查这些列的类别是否全为"character"
+all_character <- all(column_classes == "character")
+
+# 输出结果
+print(all_character) # TRUE, All columns of genotype are character
+```
+
+```{r}
+convert_genotype <- function(column, column_name) {
+  if (!is.character(column)) {
+    column <- as.character(column)
+  }
+
+  unique_combinations <- unique(column)
+
+  same_letter_combinations <- unique_combinations[sapply(unique_combinations, function(x) substr(x, 1, 1) == substr(x, 2, 2))]
+  different_letter_combinations <- setdiff(unique_combinations, same_letter_combinations)
+  
+  same_letter_values <- case_when(
+    column %in% same_letter_combinations[1] ~ 0,
+    column %in% same_letter_combinations[2] ~ 2,
+    TRUE ~ NA_real_
+  )
+
+  different_letter_values <- case_when(
+    column %in% different_letter_combinations | column %in% sapply(different_letter_combinations, function(x) paste(rev(unlist(strsplit(x, ""))), collapse = "")) ~ 1,
+    TRUE ~ NA_real_
+  )
+
+  # 合并相同字母组合和不同字母组合的值
+  result <- case_when(
+    !is.na(same_letter_values) ~ same_letter_values,
+    !is.na(different_letter_values) ~ different_letter_values,
+    TRUE ~ NA_real_
+  )
+
+  return(result)
+}
+```
+
+```{r}
+# Converting data
+start_column <- 4
+dt_converted_subset <- as.data.frame(mapply(convert_genotype, dt[, 4:ncol(dt)], colnames(dt)[4:ncol(dt)], SIMPLIFY = FALSE))
+dt_converted <- cbind(dt[, 1:(start_column - 1)], dt_converted_subset)
+head(dt_converted)
+
+# Save dt_converted to a csv file
+write.csv(dt_converted, "hgdt_converted.csv", row.names = FALSE)
+```
+
+```{r}
+numeric_data <- dt_converted_subset
+
+# Do PCA
+pca_result <- prcomp(numeric_data, scale. = TRUE)
+
+# choose first two Principal Component
+pca_scores <- pca_result$x[, 1:2]
+
+# Using K-means to do the cluster
+set.seed(233) 
+num_clusters <- 3 # change class number
+kmeans_result <- kmeans(pca_scores, centers = num_clusters)
+
+# Add the cluster result to the column
+dt_converted_subset$cluster <- factor(kmeans_result$cluster)
+
+# Show the result
+dt_converted_subset$cluster
+
+pca_clusters_dt <- data.frame(PC1 = pca_scores[, 1], 
+                              PC2 = pca_scores[, 2], 
+                              continent = factor(dt[, 3]),
+                              cluster = factor(kmeans_result$cluster))
+```
+
+```{r}
+compute_cluster_hull <- function(cluster_id, data) {
+  cluster_data <- data[data$cluster == cluster_id, ]
+  hull_points <- chull(cluster_data$"PC1", cluster_data$"PC2")
+  cluster_data[hull_points, ]
+}
+
+cluster_hulls <- lapply(unique(pca_clusters_dt$cluster), compute_cluster_hull, data = pca_clusters_dt)
+hulls_df <- do.call(rbind, cluster_hulls)
+
+ggplot() +
+  geom_polygon(data = hulls_df, aes(x = PC1, y = PC2, fill = cluster), alpha = 0.2) +
+  geom_point(data = pca_clusters_dt, aes(x = PC1, y = PC2, color = cluster)) +
+  theme_minimal() +
+  labs(title = "PCA plot with k-means clustering and shaded areas",
+       x = "PC1",
+       y = "PC2",
+       color = "Cluster",
+       fill = "Cluster")
+
+```
+
+```{r}
+ggplot(pca_clusters_dt, aes(x = PC1, y = PC2, color = continent)) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(title = "PCA and Clustering Results",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "continent") +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+```
+```{r}
+tsne_result <- Rtsne(numeric_data, perplexity = 30, check_duplicates = FALSE)
+# Add t-SNE coordinates and continental information to a data frame
+tsne_plot_data <- data.frame(tsne_result$Y, continent = dt[, 1:(start_column - 1)])
+
+# Plot t-SNE results, colored by continent
+ggplot(tsne_plot_data, aes(x = X1, y = X2, color = continent)) +
+  geom_point() +
+  theme_minimal()
+```
